@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "generate": "prisma generate",
+    "studio": "prisma studio --schema prisma/schema.prisma",
     "migrate": "prisma migrate dev --name init",
     "dbup": "docker-compose up -d",
     "dbdown": "docker-compose down"
@@ -21,7 +22,7 @@
   },
   "homepage": "https://github.com/OmarBagdadi/Conference-Room-Booking-API#readme",
   "dependencies": {
-    "@prisma/client": "^7.0.1",
+    "@prisma/client": "^6.19.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0"
