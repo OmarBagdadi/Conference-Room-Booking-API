@@ -43,7 +43,7 @@ model Booking {
   title        String
   startTime    DateTime
   endTime      DateTime
-  status       String          @default("active") // active, cancelled, completed
+  status       String          @default("pending") // pending, active, cancelled, completed
   recurrence   RecurrenceRule? @relation(fields: [recurrenceId], references: [id])
   recurrenceId Int?
   history      BookingHistory[]

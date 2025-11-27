@@ -6,6 +6,7 @@ const swaggerUi = require('swagger-ui-express');
 const { swaggerSpec } = require('./swaggerdocConfig');
 const roomsRouter = require('./routes/rooms.route.js');
 const usersRouter = require('./routes/users.route.js');
+const bookingsRouter = require('./routes/bookings.route.js');
 
 const app = express();
 app.use(cors());
@@ -29,6 +30,7 @@ app.get('/', (req, res) => res.send({ ok: true }));
 // mount API routers
 app.use('/rooms', roomsRouter);
 app.use('/users', usersRouter);
+app.use('/bookings', bookingsRouter);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server listening on ${port} — docs: http://localhost:${port}/docs`));
