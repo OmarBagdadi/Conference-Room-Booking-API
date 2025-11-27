@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getRooms, createRoom , getRoomAvailability} =  require('../controllers/rooms.controller.js');
+const { getRooms, createRoom , getRoomAvailability, filterRooms} =  require('../controllers/rooms.controller.js');
 
 /**
  * @openapi
@@ -26,6 +26,33 @@ const { getRooms, createRoom , getRoomAvailability} =  require('../controllers/r
  *                     type: integer
  */
 router.get('/', getRooms);
+
+/**
+ * @openapi
+ * /rooms/filter:
+ *   get:
+ *     summary: Filter rooms by minimum capacity and/or amenities
+ *     description: Provide either or both query parameters to filter rooms. Amenities can be provided as a comma separated string or repeated query parameter.
+ *     parameters:
+ *       - in: query
+ *         name: capacity
+ *         schema:
+ *           type: integer
+ *         description: Minimum required capacity (optional)
+ *         example: 6
+ *       - in: query
+ *         name: amenities
+ *         schema:
+ *           type: string
+ *         description: Comma separated list of required amenities or repeated param (optional). eg. "TV,Whiteboard"
+ *     responses:
+ *       '200':
+ *         description: List of rooms matching filters
+ *       '400':
+ *         description: Invalid query parameters
+ */
+router.get('/filter', filterRooms);
+
 
 /**
  * @openapi

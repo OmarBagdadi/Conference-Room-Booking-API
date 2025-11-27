@@ -6,6 +6,52 @@ async function getRooms(req,res) {
     res.json(rooms);
 }
 
+async function filterRooms(req, res, next) {
+  try {
+    const { capacity, amenities } = req.query;
+    
+    // require at least one either capacity or amenities
+    if (capacity === undefined && amenities === undefined) {
+      return res.status(400).json({ error: 'Provide at least one of the 2 fields capacity or amenities' });
+    }
+    
+    const where = {};
+
+    if (capacity !== undefined) {
+      const cap = Number(capacity);
+      if (!Number.isInteger(cap) || cap < 0) {
+        return res.status(400).json({ error: 'Invalid capacity' });
+      }
+      where.capacity = { gte: cap };
+    }
+
+    let rooms = await prisma.room.findMany({ where });
+
+    if (amenities !== undefined) {
+      const raw = String(amenities);
+      const list = raw
+        .split(',')
+        .map(a => a.trim())
+        .filter(Boolean)
+        .map(a => a.toLowerCase());
+
+      if (list.length === 0) {
+        return res.status(400).json({ error: 'amenities query must contain at least one non-empty value' });
+      }
+
+      rooms = rooms.filter(room => {
+        const roomAmenities = (room.amenities || []).map(a => String(a).toLowerCase());
+        // ensure all requested amenities are present (case-insensitive)
+        return list.every(reqAmen => roomAmenities.includes(reqAmen));
+      });
+    }
+
+    res.json(rooms);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function createRoom(req, res) {
   const data = req.body;
   const created = await prisma.room.create({ data });
@@ -48,6 +94,7 @@ async function getRoomAvailability(req, res, next) {
     });
 
     // build availability by subtracting bookings from working hours
+    const MIN_MINUTES = 30;
     const availability = [];
     let cursor = workStart;
 
@@ -59,7 +106,10 @@ async function getRoomAvailability(req, res, next) {
       if (bStart > cursor) {
         const slotEnd = bStart < workEnd ? bStart : workEnd;
         if (cursor < slotEnd) {
-          availability.push({ start: cursor.toISOString(), end: slotEnd.toISOString() });
+          const durationMinutes = (slotEnd.getTime() - cursor.getTime()) / (1000 * 60);
+          if (durationMinutes >= MIN_MINUTES) {
+            availability.push({ start: cursor.toISOString(), end: slotEnd.toISOString() });
+          }
         }
       }
 
@@ -70,7 +120,10 @@ async function getRoomAvailability(req, res, next) {
 
     // final slot after last booking
     if (cursor < workEnd) {
-      availability.push({ start: cursor.toISOString(), end: workEnd.toISOString() });
+      const durationMinutes = (workEnd.getTime() - cursor.getTime()) / (1000 * 60);
+      if (durationMinutes >= MIN_MINUTES) {
+        availability.push({ start: cursor.toISOString(), end: workEnd.toISOString() });
+      }
     }
 
     res.json({ date, roomId: id, availability });
@@ -79,4 +132,4 @@ async function getRoomAvailability(req, res, next) {
   }
 }
 
-module.exports = { getRooms, createRoom , getRoomAvailability};
+module.exports = { getRooms, createRoom , getRoomAvailability, filterRooms};
