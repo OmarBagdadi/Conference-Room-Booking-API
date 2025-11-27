@@ -15,29 +15,80 @@ datasource db {
 }
 
 model User {
-  id        Int       @id @default(autoincrement())
-  name      String
-  email     String    @unique
-  bookings  Booking[]
+  id            Int             @id @default(autoincrement())
+  name          String
+  email         String          @unique
+  role          String?         // optional: "admin", "member"
+  bookings      Booking[]
+  waitingList   WaitingList[]
+  notifications Notification[]
+  history       BookingHistory[]
 }
 
 model Room {
   id        Int       @id @default(autoincrement())
   name      String
   capacity  Int
-  amenities String[]
+  amenities String[]  // stored as Postgres text[] or JSONB
   bookings  Booking[]
+  waiting   WaitingList[]
 }
 
 model Booking {
-  id        Int       @id @default(autoincrement())
-  room      Room      @relation(fields: [roomId], references: [id])
-  roomId    Int
-  user      User      @relation(fields: [userId], references: [id])
-  userId    Int
-  title     String
-  startTime DateTime
-  endTime   DateTime
-  status    String    @default("active")
+  id           Int             @id @default(autoincrement())
+  room         Room            @relation(fields: [roomId], references: [id])
+  roomId       Int
+  user         User            @relation(fields: [userId], references: [id])
+  userId       Int
+  title        String
+  startTime    DateTime
+  endTime      DateTime
+  status       String          @default("active") // active, cancelled, completed
+  recurrence   RecurrenceRule? @relation(fields: [recurrenceId], references: [id])
+  recurrenceId Int?
+  history      BookingHistory[]
+  notifications Notification[]
 }
+
+model RecurrenceRule {
+  id         Int      @id @default(autoincrement())
+  frequency  String   // "daily" or "weekly"
+  interval   Int      @default(1) // every N days/weeks
+  startDate  DateTime
+  endDate    DateTime
+  bookings   Booking[]
+}
+
+model WaitingList {
+  id               Int      @id @default(autoincrement())
+  room             Room     @relation(fields: [roomId], references: [id])
+  roomId           Int
+  user             User     @relation(fields: [userId], references: [id])
+  userId           Int
+  desiredStartTime DateTime
+  desiredEndTime   DateTime
+  status           String   @default("pending") // pending, notified, converted
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+  bookingId Int?
+  type      String   // booking_created, booking_cancelled, waitlist_available
+  status    String   @default("pending") // pending, sent
+  createdAt DateTime @default(now())
+}
+
+model BookingHistory {
+  id        Int      @id @default(autoincrement())
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  bookingId Int
+  action    String   // created, updated, cancelled
+  timestamp DateTime @default(now())
+  changedBy User     @relation(fields: [changedById], references: [id])
+  changedById Int
+}
+
 
