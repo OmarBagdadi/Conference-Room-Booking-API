@@ -4,7 +4,9 @@ const prisma = new PrismaClient();
 
 async function getBookings(req, res) {
     try {
-        const bookings = await prisma.booking.findMany();
+        const bookings = await prisma.booking.findMany({
+            where: { status: { not: 'cancelled' } }
+        });
         res.json(bookings);
     } catch (err) {
         res.status(404).json({ error: 'No bookings found' })
@@ -21,7 +23,7 @@ async function getBookingById(req, res, next) {
     }
 
     const booking = await prisma.booking.findUnique({
-      where: { id: bookingId },
+      where: { id: bookingId , status: { not: 'cancelled' }},
       include: { room: true, user: true }
     });
 
@@ -116,6 +118,22 @@ async function createBooking(req, res) {
         endTime: end
       }
     });
+
+    // Add a record to booking history 
+    try {
+      if (prisma.bookingHistory) {
+        await prisma.bookingHistory.create({
+          data: {
+            bookingId: created.id,
+            action: 'created',
+            userId: user_id,
+          }
+        });
+      }
+    } catch (historyErr) {
+      // log but don't block the main flow
+      console.error('Failed to write booking history:', historyErr);
+    }
 
     res.status(201).json(created);
   } catch (err) {
@@ -223,18 +241,20 @@ async function deleteBooking(req, res, next) {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    // soft-delete, mark as 'cancelled'
-    // if (booking.status === 'cancelled') {
-    //   return res.status(400).json({ error: 'Booking already cancelled' });
-    // }
+    //soft-delete, mark as 'cancelled'
+    if (booking.status === 'cancelled') {
+      return res.status(400).json({ error: 'Booking already cancelled' });
+    }
 
-    // const cancelled = await prisma.booking.update({
-    //   where: { id: bookingId },
-    //   data: { status: 'cancelled' }
-    // });
-    const cancelled = await prisma.booking.delete({ 
-        where: { id: bookingId } 
+    const cancelled = await prisma.booking.update({
+      where: { id: bookingId },
+      data: { status: 'cancelled' }
     });
+
+    // Code for actual delete
+    // const cancelled = await prisma.booking.delete({ 
+    //     where: { id: bookingId } 
+    // });
 
     res.json({ message: 'Booking cancelled', booking: cancelled });
   } catch (err) {
