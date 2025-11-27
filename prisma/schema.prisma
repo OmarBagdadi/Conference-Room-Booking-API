@@ -21,7 +21,6 @@ model User {
   role          String?         // optional: "admin", "member"
   bookings      Booking[]
   waitingList   WaitingList[]
-  notifications Notification[]
   history       BookingHistory[]
 }
 
@@ -47,7 +46,6 @@ model Booking {
   recurrence   RecurrenceRule? @relation(fields: [recurrenceId], references: [id])
   recurrenceId Int?
   history      BookingHistory[]
-  notifications Notification[]
 }
 
 model RecurrenceRule {
