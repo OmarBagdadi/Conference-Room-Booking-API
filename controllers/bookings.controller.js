@@ -100,8 +100,8 @@ async function createBooking(req, res) {
 
     if (conflict) {
       // wrap pending booking + waiting list + history in a transaction
-      const [pendingBooking, waiting] = await prisma.$transaction([
-        prisma.booking.create({
+      const result = await prisma.$transaction(async (tx) => {
+        const pendingBooking = await tx.booking.create({
           data: {
             roomId: room_id,
             userId: user_id,
@@ -110,21 +110,25 @@ async function createBooking(req, res) {
             endTime: end,
             status: 'pending'
           }
-        }),
-        prisma.waitingList.create({
+        });
+
+        const waiting = await tx.waitingList.create({
           data: {
-            bookingId: conflict.id, // or link to the new pending booking depending on schema
+            bookingId: pendingBooking.id,   // ✅ link to the new pending booking
             status: 'pending'
           }
-        }),
-        prisma.bookingHistory.create({
+        });
+
+        const history = await tx.bookingHistory.create({
           data: {
-            bookingId: conflict.id,
+            bookingId: pendingBooking.id,   // ✅ log against the pending booking
             action: 'created-pending',
             changedById: user_id
           }
-        })
-      ]);
+        });
+
+        return { pendingBooking, waiting, history };
+      });
 
       return res.status(409).json({
         error: 'Booking conflict — request added as pending and queued in waiting list',
@@ -134,10 +138,11 @@ async function createBooking(req, res) {
           endTime: conflict.endTime,
           title: conflict.title
         },
-        pendingBooking,
-        waitingListEntry: waiting
+        pendingBooking: result.pendingBooking,
+        waitingListEntry: result.waiting
       });
     }
+
 
     // wrap active booking + history in a transaction
     const [created] = await prisma.$transaction([
@@ -207,7 +212,7 @@ async function updateBooking(req, res, next) {
     // verify booking exists
     const existing = await prisma.booking.findUnique({
       where: { id: bookingId },
-      include: { recurrenceRule: true }
+      include: { recurrence: true }
     });
     if (!existing) return res.status(404).json({ error: 'Booking not found' });
 
@@ -278,10 +283,7 @@ async function updateBooking(req, res, next) {
         });
         await tx.waitingList.updateMany({
           where: {
-            roomId,
-            userId: pendingBooking.userId,
-            desiredStartTime: oldStart,
-            desiredEndTime: oldEnd,
+            bookingId: pendingBooking.id,
             status: 'pending'
           },
           data: { status: 'converted' }
@@ -297,8 +299,8 @@ async function updateBooking(req, res, next) {
 
       // recurrence logic: if marked complete and has recurrence rule
       let nextBooking = null;
-      if (status === 'complete' && existing.recurrenceRule) {
-        const rule = existing.recurrenceRule;
+      if (status === 'complete' && existing.recurrence) {
+        const rule = existing.recurrence;
         let nextStart = new Date(start);
         let nextEnd = new Date(end);
 

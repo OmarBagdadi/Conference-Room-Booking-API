@@ -49,7 +49,6 @@ router.get('/:id', getBookingById);
  *               - title
  *               - start_time
  *               - end_time
- *               - status
  *             properties:
  *               user_id:
  *                 type: integer
@@ -65,9 +64,6 @@ router.get('/:id', getBookingById);
  *                 type: string
  *                 format: date-time
  *                 description: This field represents a date in ISO 8601 format (e.g., 2023-10-27)
- *               status:
- *                 type: string
- *                 description: Booking status (e.g., "pending", "active", "cancelled", "completed") default to active
  *     responses:
  *       201:
  *         description: New booking created
