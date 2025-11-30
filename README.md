@@ -8,7 +8,7 @@ An API for booking conference rooms with containerized PostgreSQL database and N
   - Download from [docker.com](https://www.docker.com/products/docker-desktop)
 - **Git** (to clone the repo)
 
-That's it! No need to install Node.js, npm, or PostgreSQL — everything runs in containers.
+No need to install Node.js, npm, or PostgreSQL everything runs in containers.
 
 ## Quick Start
 
@@ -23,6 +23,12 @@ cd Conference-Room-Booking-API
 ```bash
 docker compose up --build
 ```
+or
+
+```bash
+docker compose up --build -d
+```
+to run in detached mode
 
 This command:
 
@@ -39,7 +45,6 @@ Server listening on 3000 — docs: http://localhost:3000/docs
 
 ### 3. Access the API
 - Swagger UI (API Docs): http://localhost:3000/docs
-- API Base URL: http://localhost:3000
 
 #### Common Commands
 
@@ -109,6 +114,60 @@ docker compose down -v
 - **GET /bookings/:id** — Get booking details
 - **PATCH /bookings/:id** — Update/reschedule a booking
 - **DELETE /bookings/:id** — Cancel a booking
+
+## Test Cases for Routes
+
+### Rooms Routes
+- GET /rooms — List all rooms
+  - 200 OK: Returns an array of rooms with id, name, capacity, amenities.
+  - Validation: Ensure seeded rooms appear (e.g., “Conference Room A” with capacity 10).
+- POST /rooms — Create a new room
+  - 201 Created: When valid payload { name: "New Room", capacity: 8, amenities: ["TV"] }.
+  - 400 Bad Request: Missing required fields (e.g., no name).
+  - Validation: Room appears in subsequent GET /rooms.
+- GET /rooms/:id/availability?date=YYYY-MM-DD
+  - 200 OK: Returns availability slots for valid room and date.
+  - 404 Not Found: Invalid room id.
+  - 400 Bad Request: Missing or invalid date query.
+  - Validation: Ensure booked slots are excluded, free slots within 09:00–17:00 returned.
+- GET /rooms/filter?capacity=6&amenities=TV,Whiteboard
+  - 200 OK: Returns rooms matching filters.
+  - 400 Bad Request: Invalid query parameters (e.g., non‑integer capacity).
+  - Validation: Ensure only rooms with capacity ≥6 and both amenities are returned.
+
+### Users Routes
+- GET /users — List all users
+  `- 200 OK: Returns array of users with id, name, email.
+  -` Validation: Seeded users appear.
+- GET /users/:id/bookings — Get user’s bookings
+  - 200 OK: Returns bookings for valid user id.
+  - 404 Not Found: Invalid user id.
+  - Validation: Ensure bookings match the user’s seeded data.
+
+### Bookings Routes
+- GET /bookings — List all bookings
+  - 200 OK: Returns array of bookings with id, roomId, userId, status.
+  - Validation: Seeded bookings appear.
+- POST /bookings — Create a booking
+  - 201 Created: Valid payload creates active booking.
+  - 409 Conflict: Overlapping booking → should create pending booking + waiting list entry.
+  - 400 Bad Request: Invalid payload (e.g., duration <30 minutes).
+  - Validation: Booking appears in GET /bookings, history entry created.
+- GET /bookings/:id — Get booking details
+  - 200 OK: Returns booking details for valid id.
+  - 404 Not Found: Invalid booking id.
+- PATCH /bookings/:id — Update/reschedule a booking
+  - 200 OK: Valid update changes times and logs history.
+  - 409 Conflict: Attempt to reschedule into occupied slot.
+  - 404 Not Found: Invalid booking id.
+  - Special Case: If status changed to complete and recurrence rule exists → new booking created.
+  - Validation: Updated booking returned, history entry created, recurrence booking appears.
+- DELETE /bookings/:id — Cancel a booking
+  - 200 OK: Cancels booking, logs history, promotes earliest pending booking if any.
+  - 400 Bad Request: Already cancelled booking.
+  - 404 Not Found: Invalid booking id.
+  - Validation: Cancelled booking status = cancelled, promoted booking status = active, waiting list updated.
+
 
 ## Troubleshooting
 
