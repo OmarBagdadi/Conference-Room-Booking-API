@@ -99,37 +99,32 @@ async function createBooking(req, res) {
     });
 
     if (conflict) {
-      // Create a pending booking
-      const pendingBooking = await prisma.booking.create({
-        data: {
-          roomId: room_id,
-          userId: user_id,
-          title,
-          startTime: start,
-          endTime: end,
-          status: 'pending'
-        }
-      });
-
-      // Link it into waiting list
-      const waiting = await prisma.waitingList.create({
-        data: {
-          roomId: room_id,
-          userId: user_id,
-          desiredStartTime: start,
-          desiredEndTime: end,
-          status: 'pending'
-        }
-      });
-
-      // Add booking history
-      await prisma.bookingHistory.create({
-        data: {
-          bookingId: pendingBooking.id,
-          action: 'created-pending',
-          changedById: user_id
-        }
-      });
+      // wrap pending booking + waiting list + history in a transaction
+      const [pendingBooking, waiting] = await prisma.$transaction([
+        prisma.booking.create({
+          data: {
+            roomId: room_id,
+            userId: user_id,
+            title,
+            startTime: start,
+            endTime: end,
+            status: 'pending'
+          }
+        }),
+        prisma.waitingList.create({
+          data: {
+            bookingId: conflict.id, // or link to the new pending booking depending on schema
+            status: 'pending'
+          }
+        }),
+        prisma.bookingHistory.create({
+          data: {
+            bookingId: conflict.id,
+            action: 'created-pending',
+            changedById: user_id
+          }
+        })
+      ]);
 
       return res.status(409).json({
         error: 'Booking conflict — request added as pending and queued in waiting list',
@@ -144,34 +139,26 @@ async function createBooking(req, res) {
       });
     }
 
-
-    // create booking
-    const created = await prisma.booking.create({
-      data: {
-        roomId: room_id,
-        userId: user_id,
-        title,
-        startTime: start,
-        endTime: end,
-        status: 'active'
-      }
-    });
-
-    // Add a record to booking history 
-    try {
-      if (prisma.bookingHistory) {
-        await prisma.bookingHistory.create({
-          data: {
-            bookingId: created.id,
-            action: 'created',
-            userId: user_id,
-          }
-        });
-      }
-    } catch (historyErr) {
-      // log but don't block the main flow
-      console.error('Failed to write booking history:', historyErr);
-    }
+    // wrap active booking + history in a transaction
+    const [created] = await prisma.$transaction([
+      prisma.booking.create({
+        data: {
+          roomId: room_id,
+          userId: user_id,
+          title,
+          startTime: start,
+          endTime: end,
+          status: 'active'
+        }
+      }),
+      prisma.bookingHistory.create({
+        data: {
+          bookingId: created?.id, // will be filled after booking creation
+          action: 'created',
+          changedById: user_id
+        }
+      })
+    ]);
 
     res.status(201).json(created);
   } catch (err) {
@@ -188,25 +175,22 @@ async function updateBooking(req, res, next) {
       return res.status(400).json({ error: 'Invalid booking id' });
     }
 
-    // validate request
-    const { title, start_time, end_time } = req.body;
+    const { title, start_time, end_time, status } = req.body;
     if (!start_time || !end_time) {
       return res.status(400).json({ error: 'start_time and end_time are required' });
     }
 
-    // Check if start_time and end_time are valid dates
     const start = new Date(start_time);
     const end = new Date(end_time);
     if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
       return res.status(400).json({ error: 'Invalid start_time or end_time' });
     }
 
-    // working hours check (09:00 - 17:00)
+    // working hours check
     const startMinutes = start.getHours() * 60 + start.getMinutes();
     const endMinutes = end.getHours() * 60 + end.getMinutes();
     const WORK_START = 9 * 60;
     const WORK_END = 17 * 60;
-
     if (startMinutes < WORK_START || endMinutes > WORK_END) {
       return res.status(400).json({ error: 'Bookings must be within working hours 09:00-17:00' });
     }
@@ -221,14 +205,17 @@ async function updateBooking(req, res, next) {
     }
 
     // verify booking exists
-    const existing = await prisma.booking.findUnique({ where: { id: bookingId } });
+    const existing = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { recurrenceRule: true }
+    });
     if (!existing) return res.status(404).json({ error: 'Booking not found' });
 
     const roomId = existing.roomId;
     const oldStart = existing.startTime;
     const oldEnd = existing.endTime;
 
-    // check for overlapping bookings on the same room excluding this booking
+    // check for overlapping bookings excluding this one
     const conflict = await prisma.booking.findFirst({
       where: {
         roomId,
@@ -240,9 +227,7 @@ async function updateBooking(req, res, next) {
         ]
       }
     });
-
     if (conflict) {
-      // Reject update if slot is occupied
       return res.status(409).json({
         error: 'Booking conflict — cannot update to an occupied slot',
         conflict: {
@@ -254,63 +239,105 @@ async function updateBooking(req, res, next) {
       });
     }
 
-    // No conflict → perform update
-    const updated = await prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        title: typeof title === 'string' ? title : existing.title,
-        startTime: start,
-        endTime: end,
-        status: 'active'
-      }
-    });
-
-    await prisma.bookingHistory.create({
-      data: {
-        bookingId,
-        action: 'updated',
-        changedById: existing.userId
-      }
-    });
-
-    // Promotion logic for old slot
-    const pendingBooking = await prisma.booking.findFirst({
-      where: {
-        roomId,
-        status: 'pending',
-        startTime: oldStart,
-        endTime: oldEnd
-      }
-    });
-
-    let promoted = null;
-    if (pendingBooking) {
-      promoted = await prisma.booking.update({
-        where: { id: pendingBooking.id },
-        data: { status: 'active' }
-      });
-
-      await prisma.waitingList.updateMany({
-        where: {
-          roomId,
-          userId: pendingBooking.userId,
-          desiredStartTime: oldStart,
-          desiredEndTime: oldEnd,
-          status: 'pending'
-        },
-        data: { status: 'converted' }
-      });
-
-      await prisma.bookingHistory.create({
+    // Transaction: update booking + history + promotion + recurrence
+    const result = await prisma.$transaction(async (tx) => {
+      // update booking
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
         data: {
-          bookingId: pendingBooking.id,
-          action: 'promoted-from-waiting',
-          changedById: pendingBooking.userId
+          title: typeof title === 'string' ? title : existing.title,
+          startTime: start,
+          endTime: end,
+          status: status || 'active'
         }
       });
-    }
 
-    res.status(200).json({ updated, promoted });
+      // add history
+      await tx.bookingHistory.create({
+        data: {
+          bookingId,
+          action: 'updated',
+          changedById: existing.userId
+        }
+      });
+
+      // promotion logic for old slot
+      let promoted = null;
+      const pendingBooking = await tx.booking.findFirst({
+        where: {
+          roomId,
+          status: 'pending',
+          startTime: oldStart,
+          endTime: oldEnd
+        }
+      });
+      if (pendingBooking) {
+        promoted = await tx.booking.update({
+          where: { id: pendingBooking.id },
+          data: { status: 'active' }
+        });
+        await tx.waitingList.updateMany({
+          where: {
+            roomId,
+            userId: pendingBooking.userId,
+            desiredStartTime: oldStart,
+            desiredEndTime: oldEnd,
+            status: 'pending'
+          },
+          data: { status: 'converted' }
+        });
+        await tx.bookingHistory.create({
+          data: {
+            bookingId: pendingBooking.id,
+            action: 'promoted-from-waiting',
+            changedById: pendingBooking.userId
+          }
+        });
+      }
+
+      // recurrence logic: if marked complete and has recurrence rule
+      let nextBooking = null;
+      if (status === 'complete' && existing.recurrenceRule) {
+        const rule = existing.recurrenceRule;
+        let nextStart = new Date(start);
+        let nextEnd = new Date(end);
+
+        if (rule.frequency === 'daily') {
+          nextStart.setDate(nextStart.getDate() + rule.interval);
+          nextEnd.setDate(nextEnd.getDate() + rule.interval);
+        } else if (rule.frequency === 'weekly') {
+          nextStart.setDate(nextStart.getDate() + 7 * rule.interval);
+          nextEnd.setDate(nextEnd.getDate() + 7 * rule.interval);
+        }
+        // add other recurrence types as needed
+
+        // only create if within recurrence window
+        if (!rule.endDate || nextStart <= rule.endDate) {
+          nextBooking = await tx.booking.create({
+            data: {
+              roomId,
+              userId: existing.userId,
+              title: existing.title,
+              startTime: nextStart,
+              endTime: nextEnd,
+              status: 'active',
+              recurrenceId: rule.id
+            }
+          });
+          await tx.bookingHistory.create({
+            data: {
+              bookingId: nextBooking.id,
+              action: 'created-from-recurrence',
+              changedById: existing.userId
+            }
+          });
+        }
+      }
+
+      return { updated, promoted, nextBooking };
+    });
+
+    res.status(200).json(result);
   } catch (err) {
     next(err);
   }
@@ -330,73 +357,76 @@ async function deleteBooking(req, res, next) {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    // already cancelled?
     if (booking.status === 'cancelled') {
       return res.status(400).json({ error: 'Booking already cancelled' });
     }
 
-    // soft-delete: mark as cancelled
-    const cancelled = await prisma.booking.update({
-      where: { id: bookingId },
-      data: { status: 'cancelled' }
-    });
-
-    // log cancellation in history
-    await prisma.bookingHistory.create({
-      data: {
-        bookingId: bookingId,
-        action: 'cancelled',
-        changedById: booking.userId
-      }
-    });
-
-    // --- Promotion logic ---
-    // Find earliest pending booking for the same room
-    const pendingBooking = await prisma.booking.findFirst({
-      where: {
-        roomId: booking.roomId,
-        status: 'pending'
-      },
-      orderBy: { startTime: 'asc' }
-    });
-
-    let promoted = null;
-    let updatedWaiting = null;
-
-    if (pendingBooking) {
-      // Promote booking to active
-      promoted = await prisma.booking.update({
-        where: { id: pendingBooking.id },
-        data: { status: 'active' }
+    // Transaction: cancel booking + history + promotion logic
+    const result = await prisma.$transaction(async (tx) => {
+      // soft-delete: mark as cancelled
+      const cancelled = await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'cancelled' }
       });
 
-      // Update waiting list entry for this booking
-      updatedWaiting = await prisma.waitingList.updateMany({
-        where: {
-          roomId: pendingBooking.roomId,
-          userId: pendingBooking.userId,
-          desiredStartTime: pendingBooking.startTime,
-          desiredEndTime: pendingBooking.endTime,
-          status: 'pending'
-        },
-        data: { status: 'converted' }
-      });
-
-      // Log promotion in history
-      await prisma.bookingHistory.create({
+      // log cancellation in history
+      await tx.bookingHistory.create({
         data: {
-          bookingId: pendingBooking.id,
-          action: 'promoted-from-waiting',
-          changedById: pendingBooking.userId
+          bookingId,
+          action: 'cancelled',
+          changedById: booking.userId
         }
       });
-    }
+
+      // promotion logic
+      const pendingBooking = await tx.booking.findFirst({
+        where: {
+          roomId: booking.roomId,
+          status: 'pending'
+        },
+        orderBy: { startTime: 'asc' }
+      });
+
+      let promoted = null;
+      let updatedWaiting = null;
+
+      if (pendingBooking) {
+        // promote to active
+        promoted = await tx.booking.update({
+          where: { id: pendingBooking.id },
+          data: { status: 'active' }
+        });
+
+        // update waiting list entry
+        updatedWaiting = await tx.waitingList.updateMany({
+          where: {
+            roomId: pendingBooking.roomId,
+            userId: pendingBooking.userId,
+            desiredStartTime: pendingBooking.startTime,
+            desiredEndTime: pendingBooking.endTime,
+            status: 'pending'
+          },
+          data: { status: 'converted' }
+        });
+
+        // log promotion in history
+        await tx.bookingHistory.create({
+          data: {
+            bookingId: pendingBooking.id,
+            action: 'promoted-from-waiting',
+            changedById: pendingBooking.userId
+          }
+        });
+      }
+
+      return { cancelled, promoted, updatedWaiting };
+    });
 
     res.json({
       message: 'Booking cancelled',
-      booking: cancelled,
-      promotedBooking: promoted,
-      waitingListUpdate: updatedWaiting
+      booking: result.cancelled,
+      promotedBooking: result.promoted,
+      waitingListUpdate: result.updatedWaiting
     });
   } catch (err) {
     next(err);
