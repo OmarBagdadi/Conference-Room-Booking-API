@@ -181,6 +181,82 @@ async function updateBooking(req, res, next) {
     }
 
     const { title, start_time, end_time, status } = req.body;
+
+    // verify booking exists
+    const existing = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { recurrence: true }
+    });
+    if (!existing) return res.status(404).json({ error: 'Booking not found' });
+
+    // --- CASE 1: status-only update should only accept complete ---
+    if (status && !start_time && !end_time) {
+
+      // verify status update is valid
+      if (status !== 'complete') {
+        return res.status(400).json({ error: 'Invalid status' });
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.booking.update({
+          where: { id: bookingId },
+          data: { status }
+        });
+
+        await tx.bookingHistory.create({
+          data: {
+            bookingId,
+            action: `status-changed-to-${status}`,
+            changedById: existing.userId
+          }
+        });
+
+        // recurrence logic: if marked complete and has recurrence rule
+        let nextBooking = null;
+        if (status === 'complete' && existing.recurrence) {
+          const rule = existing.recurrence;
+          let nextStart = new Date(existing.startTime);
+          let nextEnd = new Date(existing.endTime);
+
+          if (rule.frequency === 'daily') {
+            nextStart.setDate(nextStart.getDate() + rule.interval);
+            nextEnd.setDate(nextEnd.getDate() + rule.interval);
+          } else if (rule.frequency === 'weekly') {
+            nextStart.setDate(nextStart.getDate() + 7 * rule.interval);
+            nextEnd.setDate(nextEnd.getDate() + 7 * rule.interval);
+          }
+
+          if (!rule.endDate || nextStart <= rule.endDate) {
+            nextBooking = await tx.booking.create({
+              data: {
+                roomId: existing.roomId,
+                userId: existing.userId,
+                title: existing.title,
+                startTime: nextStart,
+                endTime: nextEnd,
+                status: 'active',
+                recurrenceId: rule.id
+              }
+            });
+
+            await tx.bookingHistory.create({
+              data: {
+                bookingId: nextBooking.id,
+                action: 'created-from-recurrence',
+                changedById: existing.userId
+              }
+            });
+          }
+        }
+
+        return { updated, nextBooking };
+      });
+
+      return res.status(200).json(result);
+    }
+
+    // --- CASE 2: reschedule update ---
+
     if (!start_time || !end_time) {
       return res.status(400).json({ error: 'start_time and end_time are required' });
     }
@@ -208,13 +284,6 @@ async function updateBooking(req, res, next) {
     if (durationMinutes > 240) {
       return res.status(400).json({ error: 'Maximum booking duration is 4 hours' });
     }
-
-    // verify booking exists
-    const existing = await prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: { recurrence: true }
-    });
-    if (!existing) return res.status(404).json({ error: 'Booking not found' });
 
     const roomId = existing.roomId;
     const oldStart = existing.startTime;

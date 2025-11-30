@@ -103,6 +103,9 @@ router.post('/', createBooking);
  *                 type: string
  *                 format: date-time
  *                 description: This field represents a date in ISO 8601 format (e.g., 2023-10-27)
+ *              status:
+ *                 type: string
+ *                 description: Status of the booking can only be updated to complete(optional)
  *     responses:
  *       200:
  *         description: Booking sucessfully updated 
