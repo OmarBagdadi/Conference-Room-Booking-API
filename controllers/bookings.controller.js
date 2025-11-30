@@ -50,6 +50,7 @@ async function createBooking(req, res) {
       return res.status(400).json({ error: 'Invalid request payload' });
     }
 
+    // Check if start_time and end_time are valid dates
     const start = new Date(start_time);
     const end = new Date(end_time);
     if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
@@ -62,6 +63,7 @@ async function createBooking(req, res) {
     const WORK_START = 9 * 60;   // 09:00
     const WORK_END = 17 * 60;    // 17:00
 
+    // check if within working hours
     if (startMinutes < WORK_START || endMinutes > WORK_END) {
       return res.status(400).json({ error: 'Bookings must be within working hours 09:00-17:00' });
     }
@@ -75,7 +77,7 @@ async function createBooking(req, res) {
       return res.status(400).json({ error: 'Maximum booking duration is 4 hours' });
     }
 
-    // verify room and user exist (optional but recommended)
+    // verify room and user exist
     const [room, user] = await Promise.all([
       prisma.room.findUnique({ where: { id: room_id } }),
       prisma.user.findUnique({ where: { id: user_id } }),
@@ -97,16 +99,51 @@ async function createBooking(req, res) {
     });
 
     if (conflict) {
+      // Create a pending booking
+      const pendingBooking = await prisma.booking.create({
+        data: {
+          roomId: room_id,
+          userId: user_id,
+          title,
+          startTime: start,
+          endTime: end,
+          status: 'pending'
+        }
+      });
+
+      // Link it into waiting list
+      const waiting = await prisma.waitingList.create({
+        data: {
+          roomId: room_id,
+          userId: user_id,
+          desiredStartTime: start,
+          desiredEndTime: end,
+          status: 'pending'
+        }
+      });
+
+      // Add booking history
+      await prisma.bookingHistory.create({
+        data: {
+          bookingId: pendingBooking.id,
+          action: 'created-pending',
+          changedById: user_id
+        }
+      });
+
       return res.status(409).json({
-        error: 'Booking conflict',
+        error: 'Booking conflict — request added as pending and queued in waiting list',
         conflict: {
           id: conflict.id,
           startTime: conflict.startTime,
           endTime: conflict.endTime,
           title: conflict.title
-        }
+        },
+        pendingBooking,
+        waitingListEntry: waiting
       });
     }
+
 
     // create booking
     const created = await prisma.booking.create({
@@ -115,7 +152,8 @@ async function createBooking(req, res) {
         userId: user_id,
         title,
         startTime: start,
-        endTime: end
+        endTime: end,
+        status: 'active'
       }
     });
 
@@ -150,11 +188,13 @@ async function updateBooking(req, res, next) {
       return res.status(400).json({ error: 'Invalid booking id' });
     }
 
+    // validate request
     const { title, start_time, end_time } = req.body;
     if (!start_time || !end_time) {
       return res.status(400).json({ error: 'start_time and end_time are required' });
     }
 
+    // Check if start_time and end_time are valid dates
     const start = new Date(start_time);
     const end = new Date(end_time);
     if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
@@ -164,14 +204,14 @@ async function updateBooking(req, res, next) {
     // working hours check (09:00 - 17:00)
     const startMinutes = start.getHours() * 60 + start.getMinutes();
     const endMinutes = end.getHours() * 60 + end.getMinutes();
-    const WORK_START = 9 * 60;   // 09:00
-    const WORK_END = 17 * 60;    // 17:00
+    const WORK_START = 9 * 60;
+    const WORK_END = 17 * 60;
 
     if (startMinutes < WORK_START || endMinutes > WORK_END) {
       return res.status(400).json({ error: 'Bookings must be within working hours 09:00-17:00' });
     }
 
-    // duration constraints: min 30 minutes, max 4 hours (240 minutes)
+    // duration constraints
     const durationMinutes = (end.getTime() - start.getTime()) / (1000 * 60);
     if (durationMinutes < 30) {
       return res.status(400).json({ error: 'Minimum booking duration is 30 minutes' });
@@ -180,16 +220,18 @@ async function updateBooking(req, res, next) {
       return res.status(400).json({ error: 'Maximum booking duration is 4 hours' });
     }
 
-    // verify booking exists and get roomId
+    // verify booking exists
     const existing = await prisma.booking.findUnique({ where: { id: bookingId } });
     if (!existing) return res.status(404).json({ error: 'Booking not found' });
 
     const roomId = existing.roomId;
+    const oldStart = existing.startTime;
+    const oldEnd = existing.endTime;
 
     // check for overlapping bookings on the same room excluding this booking
     const conflict = await prisma.booking.findFirst({
       where: {
-        roomId: roomId,
+        roomId,
         id: { not: bookingId },
         status: { not: 'cancelled' },
         AND: [
@@ -200,8 +242,9 @@ async function updateBooking(req, res, next) {
     });
 
     if (conflict) {
+      // Reject update if slot is occupied
       return res.status(409).json({
-        error: 'Booking conflict',
+        error: 'Booking conflict — cannot update to an occupied slot',
         conflict: {
           id: conflict.id,
           startTime: conflict.startTime,
@@ -211,17 +254,63 @@ async function updateBooking(req, res, next) {
       });
     }
 
-    // perform update
+    // No conflict → perform update
     const updated = await prisma.booking.update({
       where: { id: bookingId },
       data: {
         title: typeof title === 'string' ? title : existing.title,
         startTime: start,
-        endTime: end
+        endTime: end,
+        status: 'active'
       }
     });
 
-    res.status(200).json(updated);
+    await prisma.bookingHistory.create({
+      data: {
+        bookingId,
+        action: 'updated',
+        changedById: existing.userId
+      }
+    });
+
+    // Promotion logic for old slot
+    const pendingBooking = await prisma.booking.findFirst({
+      where: {
+        roomId,
+        status: 'pending',
+        startTime: oldStart,
+        endTime: oldEnd
+      }
+    });
+
+    let promoted = null;
+    if (pendingBooking) {
+      promoted = await prisma.booking.update({
+        where: { id: pendingBooking.id },
+        data: { status: 'active' }
+      });
+
+      await prisma.waitingList.updateMany({
+        where: {
+          roomId,
+          userId: pendingBooking.userId,
+          desiredStartTime: oldStart,
+          desiredEndTime: oldEnd,
+          status: 'pending'
+        },
+        data: { status: 'converted' }
+      });
+
+      await prisma.bookingHistory.create({
+        data: {
+          bookingId: pendingBooking.id,
+          action: 'promoted-from-waiting',
+          changedById: pendingBooking.userId
+        }
+      });
+    }
+
+    res.status(200).json({ updated, promoted });
   } catch (err) {
     next(err);
   }
@@ -241,22 +330,74 @@ async function deleteBooking(req, res, next) {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    //soft-delete, mark as 'cancelled'
+    // already cancelled?
     if (booking.status === 'cancelled') {
       return res.status(400).json({ error: 'Booking already cancelled' });
     }
 
+    // soft-delete: mark as cancelled
     const cancelled = await prisma.booking.update({
       where: { id: bookingId },
       data: { status: 'cancelled' }
     });
 
-    // Code for actual delete
-    // const cancelled = await prisma.booking.delete({ 
-    //     where: { id: bookingId } 
-    // });
+    // log cancellation in history
+    await prisma.bookingHistory.create({
+      data: {
+        bookingId: bookingId,
+        action: 'cancelled',
+        changedById: booking.userId
+      }
+    });
 
-    res.json({ message: 'Booking cancelled', booking: cancelled });
+    // --- Promotion logic ---
+    // Find earliest pending booking for the same room
+    const pendingBooking = await prisma.booking.findFirst({
+      where: {
+        roomId: booking.roomId,
+        status: 'pending'
+      },
+      orderBy: { startTime: 'asc' }
+    });
+
+    let promoted = null;
+    let updatedWaiting = null;
+
+    if (pendingBooking) {
+      // Promote booking to active
+      promoted = await prisma.booking.update({
+        where: { id: pendingBooking.id },
+        data: { status: 'active' }
+      });
+
+      // Update waiting list entry for this booking
+      updatedWaiting = await prisma.waitingList.updateMany({
+        where: {
+          roomId: pendingBooking.roomId,
+          userId: pendingBooking.userId,
+          desiredStartTime: pendingBooking.startTime,
+          desiredEndTime: pendingBooking.endTime,
+          status: 'pending'
+        },
+        data: { status: 'converted' }
+      });
+
+      // Log promotion in history
+      await prisma.bookingHistory.create({
+        data: {
+          bookingId: pendingBooking.id,
+          action: 'promoted-from-waiting',
+          changedById: pendingBooking.userId
+        }
+      });
+    }
+
+    res.json({
+      message: 'Booking cancelled',
+      booking: cancelled,
+      promotedBooking: promoted,
+      waitingListUpdate: updatedWaiting
+    });
   } catch (err) {
     next(err);
   }
