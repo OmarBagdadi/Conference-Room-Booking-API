@@ -6,10 +6,17 @@ function addDays(date, days) {
   result.setDate(result.getDate() + days)
   return result
 }
-function addHours(date, hours) {
-  const result = new Date(date)
-  result.setHours(result.getHours() + hours)
-  return result
+
+function setTime(baseDate, hour, minute = 0) {
+  const d = new Date(baseDate)
+  d.setHours(hour, minute, 0, 0)
+  return d
+}
+
+function workSlot(baseDate, startHour, durationMinutes) {
+  const start = setTime(baseDate, startHour)
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000)
+  return { start, end }
 }
 
 async function main() {
@@ -55,38 +62,41 @@ async function main() {
     }
   })
 
-  // --- Bookings ---
+  // --- Bookings (all between 9–17) ---
+  const slot1 = workSlot(addDays(now, 1), 9, 30)   // 09:00–09:30
   const booking1 = await prisma.booking.create({
     data: {
       roomId: 1,
       userId: 1,
       title: "Daily Standup",
-      startTime: addHours(addDays(now, 1), 9),
-      endTime: addHours(addDays(now, 1), 9.5),
+      startTime: slot1.start,
+      endTime: slot1.end,
       status: "active",
       recurrenceId: dailyRule.id
     }
   })
 
+  const slot2 = workSlot(addDays(now, 2), 10, 60)  // 10:00–11:00
   const booking2 = await prisma.booking.create({
     data: {
       roomId: 2,
       userId: 2,
       title: "Weekly Sync",
-      startTime: addHours(addDays(now, 2), 10),
-      endTime: addHours(addDays(now, 2), 11),
+      startTime: slot2.start,
+      endTime: slot2.end,
       status: "active",
       recurrenceId: weeklyRule.id
     }
   })
 
+  const slot3 = workSlot(addDays(now, 3), 14, 90)  // 14:00–15:30
   const booking3 = await prisma.booking.create({
     data: {
       roomId: 3,
       userId: 3,
       title: "Client Presentation",
-      startTime: addHours(addDays(now, 3), 14),
-      endTime: addHours(addDays(now, 3), 15.5),
+      startTime: slot3.start,
+      endTime: slot3.end,
       status: "pending"
     }
   })
