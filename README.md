@@ -46,7 +46,7 @@ Server listening on 3000 — docs: http://localhost:3000/docs
 - Run Prisma Studio (GUI database viewer)
 
 ```bash
-docker compose run --rm api npx prisma studio
+docker compose run --rm -p 5555:5555 api npx prisma studio
 ```
 Opens at http://localhost:5555
 
