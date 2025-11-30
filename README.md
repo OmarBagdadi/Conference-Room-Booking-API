@@ -160,8 +160,9 @@ docker compose down -v
   - 200 OK: Valid update changes times and logs history.
   - 409 Conflict: Attempt to reschedule into occupied slot.
   - 404 Not Found: Invalid booking id.
+  - Special Case: If booking rescheduled to another time pending booking should be promoted to active
   - Special Case: If status changed to complete and recurrence rule exists → new booking created.
-  - Validation: Updated booking returned, history entry created, recurrence booking appears.
+  - Validation: Updated booking returned, history entry created, recurrence booking appears, pending booking promoted.
 - DELETE /bookings/:id — Cancel a booking
   - 200 OK: Cancels booking, logs history, promotes earliest pending booking if any.
   - 400 Bad Request: Already cancelled booking.
