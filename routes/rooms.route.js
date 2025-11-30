@@ -31,7 +31,7 @@ router.get('/', getRooms);
  * @openapi
  * /rooms/filter:
  *   get:
- *     summary: Filter rooms by minimum capacity and/or amenities
+ *     summary: (Bonus) Filter rooms by minimum capacity and/or amenities
  *     description: Provide either or both query parameters to filter rooms. Amenities can be provided as a comma separated string or repeated query parameter.
  *     parameters:
  *       - in: query
