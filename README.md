@@ -167,6 +167,7 @@ docker compose down -v
   - 200 OK: Cancels booking, logs history, promotes earliest pending booking if any.
   - 400 Bad Request: Already cancelled booking.
   - 404 Not Found: Invalid booking id.
+  - Special Case: If a booking has a recurrence rule and is canceled a new booking should be made according to the recurrence rule.
   - Validation: Cancelled booking status = cancelled, promoted booking status = active, waiting list updated.
 
 

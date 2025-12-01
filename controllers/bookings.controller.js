@@ -422,8 +422,11 @@ async function deleteBooking(req, res, next) {
       return res.status(400).json({ error: 'Invalid booking id' });
     }
 
-    // verify booking exists
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    // verify booking exists (include recurrence rule)
+    const booking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { recurrence: true }
+    });
     if (!booking) {
       return res.status(404).json({ error: 'Booking not found' });
     }
@@ -432,7 +435,7 @@ async function deleteBooking(req, res, next) {
       return res.status(400).json({ error: 'Booking already cancelled' });
     }
 
-    // Transaction: cancel booking + history + promotion logic
+    // Transaction: cancel booking + history + promotion logic + recurrence
     const result = await prisma.$transaction(async (tx) => {
       // soft-delete: mark as cancelled
       const cancelled = await tx.booking.update({
@@ -471,10 +474,7 @@ async function deleteBooking(req, res, next) {
         // update waiting list entry
         updatedWaiting = await tx.waitingList.updateMany({
           where: {
-            roomId: pendingBooking.roomId,
-            userId: pendingBooking.userId,
-            desiredStartTime: pendingBooking.startTime,
-            desiredEndTime: pendingBooking.endTime,
+            bookingId: pendingBooking.id,
             status: 'pending'
           },
           data: { status: 'converted' }
@@ -490,14 +490,54 @@ async function deleteBooking(req, res, next) {
         });
       }
 
-      return { cancelled, promoted, updatedWaiting };
+      // recurrence logic: if booking has recurrence rule
+      let nextBooking = null;
+      if (booking.recurrence) {
+        const rule = booking.recurrence;
+        let nextStart = new Date(booking.startTime);
+        let nextEnd = new Date(booking.endTime);
+
+        if (rule.frequency === 'daily') {
+          nextStart.setDate(nextStart.getDate() + rule.interval);
+          nextEnd.setDate(nextEnd.getDate() + rule.interval);
+        } else if (rule.frequency === 'weekly') {
+          nextStart.setDate(nextStart.getDate() + 7 * rule.interval);
+          nextEnd.setDate(nextEnd.getDate() + 7 * rule.interval);
+        }
+
+        // only create if within recurrence window
+        if (!rule.endDate || nextStart <= rule.endDate) {
+          nextBooking = await tx.booking.create({
+            data: {
+              roomId: booking.roomId,
+              userId: booking.userId,
+              title: booking.title,
+              startTime: nextStart,
+              endTime: nextEnd,
+              status: 'active',
+              recurrenceId: rule.id
+            }
+          });
+
+          await tx.bookingHistory.create({
+            data: {
+              bookingId: nextBooking.id,
+              action: 'created-from-recurrence',
+              changedById: booking.userId
+            }
+          });
+        }
+      }
+
+      return { cancelled, promoted, updatedWaiting, nextBooking };
     });
 
     res.json({
       message: 'Booking cancelled',
       booking: result.cancelled,
       promotedBooking: result.promoted,
-      waitingListUpdate: result.updatedWaiting
+      waitingListUpdate: result.updatedWaiting,
+      nextBooking: result.nextBooking
     });
   } catch (err) {
     next(err);
