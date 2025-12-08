@@ -137,8 +137,8 @@ docker compose down -v
 
 ### Users Routes
 - GET /users — List all users
-  `- 200 OK: Returns array of users with id, name, email.
-  -` Validation: Seeded users appear.
+  - 200 OK: Returns array of users with id, name, email.
+  - Validation: Seeded users appear.
 - GET /users/:id/bookings — Get user’s bookings
   - 200 OK: Returns bookings for valid user id.
   - 404 Not Found: Invalid user id.
