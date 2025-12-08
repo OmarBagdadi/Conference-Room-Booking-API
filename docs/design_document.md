@@ -8,7 +8,7 @@ I wanted a schema that achieved 3NF, had no redundant attributes, strong data in
 - RecurrenceRule: Separate table for repeat patterns (daily/weekly), avoiding duplication across bookings.
 - WaitingList: One‑to‑one with a pending booking. Tracks promotion state (pending, notified, converted). This prevents duplication of user/room/time data.
 - BookingHistory: Append‑only log of actions (created, updated, cancelled, promoted). Ensures auditability and analytics.
-- Normalization: Achieves 3NF — no redundant attributes, strong referential integrity, and clear separation of concerns.
+- Normalization: Achieves 3NF with no redundant attributes, has strong referential integrity, and clear separation of concerns.
 
 ## Logic Approach
 I focused on keeping business rules clear and consistent, with validation and conflict handling at the application level.
@@ -25,23 +25,19 @@ I focused on keeping business rules clear and consistent, with validation and co
 ## Concurrent Requests
 I thought about race conditions and made sure operations are safe under concurrent load.
 
-- Transactions: Wrap conflict check and booking creation/update/cancel in a single transaction.
-- Deterministic promotion: Always promote the earliest pending booking (by start time or creation order).
-- Indexes: On (roomId, startTime, endTime, status) to make overlap checks efficient.
-- Row locks: Can be used to prevent two concurrent promotions from selecting the same pending booking.
-- Fairness: Pending bookings are promoted in consistent order to avoid user confusion.
+- Wrap conflict check and booking creation/update/cancel in a single transaction.
+- Always promote the earliest pending booking (by start time or creation order).
+- Pending bookings are promoted in consistent order to avoid user confusion.
 
 ## Scalability
 I considered both vertical improvements (indexes, caching) and horizontal scaling with containers.
 
 - Caching with Redis for availability queries.
-- Indexes on booking times and statuses for fast lookups.
-- Read replicas for heavy read queries.
 - Partitioning for large Booking/History tables.
 - Async workers for promotions and notifications.
-- API throughput improved with pagination and batching.
+- API throughput improved with pagination.
 - Use orchestration tools (Docker Compose locally, Docker Swarm in production) to spin up new API instances when load increases.
-- Load balancing to distributes traffic across all container instances.
+- Load balancing to distribute traffic across all container instances.
 - Auto‑scaling adds/removes containers based on demand.
 
 
