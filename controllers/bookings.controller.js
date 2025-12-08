@@ -35,7 +35,7 @@ async function getBookingById(req, res, next) {
 }
 
 
-async function createBooking(req, res) {
+async function createBooking(req, res, next) {
     try {
     const { room_id, user_id, start_time, end_time, title } = req.body;
 
@@ -145,8 +145,8 @@ async function createBooking(req, res) {
 
 
     // wrap active booking + history in a transaction
-    const [created] = await prisma.$transaction([
-      prisma.booking.create({
+    const result = await prisma.$transaction(async (tx) => {
+      const created = await tx.booking.create({
         data: {
           roomId: room_id,
           userId: user_id,
@@ -155,17 +155,21 @@ async function createBooking(req, res) {
           endTime: end,
           status: 'active'
         }
-      }),
-      prisma.bookingHistory.create({
+      });
+
+      await tx.bookingHistory.create({
         data: {
-          bookingId: created?.id, // will be filled after booking creation
+          bookingId: created.id,
           action: 'created',
           changedById: user_id
         }
-      })
-    ]);
+      });
 
-    res.status(201).json(created);
+      return created;
+    });
+
+  res.status(201).json(result);
+
   } catch (err) {
     next(err);
   }
